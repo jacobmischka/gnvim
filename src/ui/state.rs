@@ -15,7 +15,7 @@ use crate::nvim_bridge::{
     GridLineSegment, GridResize, GridScroll, HlAttrDefine, HlGroupSet,
     ModeChange, ModeInfo, ModeInfoSet, MsgSetPos, Notify, OptionSet,
     PopupmenuShow, RedrawEvent, TablineUpdate, WindowExternalPos,
-    WindowFloatPos, WindowPos,
+    WindowFloatPos, WindowPos, WindowViewport,
 };
 use crate::nvim_gio::GioNeovim;
 use crate::ui::cmdline::Cmdline;
@@ -413,11 +413,19 @@ impl UIState {
                 .unwrap_or_default()
                 .foreground;
 
+            let scroll_bg = self
+                .hl_defs
+                .get_hl_group(&HlGroup::CmdlineBorder)
+                .cloned()
+                .unwrap_or_default()
+                .background
+                .unwrap_or(bg);
+
             // Set the styles for our main window.
             CssProviderExt::load_from_data(
                 &self.css_provider,
                 format!(
-                    "* {{
+                    "#root {{
                         background: #{bg};
                     }}
 
@@ -425,11 +433,39 @@ impl UIState {
                         border: none;
                     }}
 
+                    #windows-container scrollbar,
+                    #windows-container-float scrollbar {{
+                        background-color: transparent;
+                        border: none;
+                    }}
+
+                    #windows-container scrollbar slider,
+                    #windows-container-float scrollbar slider {{
+                        background-color: rgba({slider_r}, {slider_g}, {slider_b}, 0.5);
+                    }}
+
+                    #windows-container scrollbar:hover,
+                    #windows-container-float scrollbar:hover {{
+                        background-color: #{scroll_bg};
+                    }}
+
+                    #windows-container scrollbar:hover slider,
+                    #windows-container-float scrollbar:hover slider {{
+                        background-color: rgba({slider_r}, {slider_g}, {slider_b}, 1);
+                    }}
+
                     #message-grid-contianer frame.scrolled {{
                         border-top: 1px solid #{msgsep}
                     }}
+
+
                     ",
+                    bg = bg.to_hex(),
                     bg = self.hl_defs.default_bg.to_hex(),
+                    slider_r = self.hl_defs.default_fg.r * 255.0,
+                    slider_g = self.hl_defs.default_fg.g * 255.0,
+                    slider_b = self.hl_defs.default_fg.b * 255.0,
+                    scroll_bg = scroll_bg.to_hex(),
                     msgsep = msgsep.unwrap_or(self.hl_defs.default_fg).to_hex(),
                 )
                 .as_bytes(),
@@ -705,6 +741,32 @@ impl UIState {
         }
     }
 
+    fn window_viewport(&mut self, e: WindowViewport) {
+        if let Some(win) = self.windows.get_mut(&e.grid) {
+            let grid = self.grids.get(&e.grid).unwrap();
+            let metrics = grid.get_grid_metrics();
+
+            if e.linecount <= metrics.rows as i64 {
+                win.hide_scrollbar();
+                return;
+            }
+
+            win.show_scrollbar();
+
+            let value = metrics.cell_height * e.topline as f64;
+            let max = metrics.cell_height * e.linecount as f64;
+
+            win.set_adjustment(
+                value,
+                0.0,
+                max,
+                metrics.height,
+                metrics.height,
+                metrics.height,
+            );
+        }
+    }
+
     fn msg_set_pos(&mut self, e: MsgSetPos) {
         let base_grid = self.grids.get(&1).unwrap();
         let base_metrics = base_grid.get_grid_metrics();
@@ -807,6 +869,9 @@ impl UIState {
             }
             RedrawEvent::MsgSetPos(evt) => {
                 evt.into_iter().for_each(|e| self.msg_set_pos(e));
+            }
+            RedrawEvent::WindowViewport(evt) => {
+                evt.into_iter().for_each(|e| self.window_viewport(e));
             }
             RedrawEvent::Ignored(_) => (),
             RedrawEvent::Unknown(e) => {

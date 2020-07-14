@@ -54,6 +54,7 @@ impl UI {
         let window = gtk::ApplicationWindow::new(app);
         window.set_title("Neovim");
         window.set_default_size(window_size.0, window_size.1);
+        window.set_widget_name("root");
 
         // Realize window resources.
         window.realize();

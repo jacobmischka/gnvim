@@ -67,8 +67,11 @@ impl MsgWindow {
 }
 
 pub struct Window {
-    fixed: gtk::Fixed,
-    frame: gtk::Frame,
+    parent: gtk::Fixed,
+
+    frame: gtk::Overlay,
+    adj: gtk::Adjustment,
+    scrollbar: gtk::Scrollbar,
 
     external_win: Option<gtk::Window>,
 
@@ -87,19 +90,34 @@ impl Window {
         grid: &Grid,
         css_provider: Option<gtk::CssProvider>,
     ) -> Self {
-        let frame = gtk::Frame::new(None);
+        let frame = gtk::Overlay::new();
         fixed.put(&frame, 0, 0);
 
         let widget = grid.widget();
         frame.add(&widget);
+        //frame.pack_start(&widget, true, true, 0);
 
+        let adj = gtk::Adjustment::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let scrollbar =
+            gtk::Scrollbar::new(gtk::Orientation::Vertical, Some(&adj));
+        scrollbar.set_halign(gtk::Align::End);
+
+        // Important to add the css provider for the scrollbar before adding
+        // it to the contianer. Otherwise the initial draw will be with the
+        // defualt styles and that looks weird.
         if let Some(css_provider) = css_provider {
-            add_css_provider!(&css_provider, frame);
+            add_css_provider!(&css_provider, frame, scrollbar);
         }
 
+        frame.add_overlay(&scrollbar);
+        frame.set_overlay_pass_through(&scrollbar, true);
+        //frame.pack_end(&scrollbar, false, false, 0);
+
         Self {
-            fixed,
+            parent: fixed,
             frame,
+            adj,
+            scrollbar,
             external_win: None,
             grid_id: grid.id,
             nvim_win: win,
@@ -108,11 +126,38 @@ impl Window {
         }
     }
 
+    pub fn set_adjustment(
+        &mut self,
+        value: f64,
+        lower: f64,
+        upper: f64,
+        step_increment: f64,
+        page_increment: f64,
+        page_size: f64,
+    ) {
+        self.adj.configure(
+            value,
+            lower,
+            upper,
+            step_increment,
+            page_increment,
+            page_size,
+        );
+    }
+
+    pub fn hide_scrollbar(&self) {
+        self.scrollbar.hide();
+    }
+
+    pub fn show_scrollbar(&self) {
+        self.scrollbar.show();
+    }
+
     pub fn set_parent(&mut self, fixed: gtk::Fixed) {
-        if self.fixed != fixed {
-            self.fixed.remove(&self.frame);
-            self.fixed = fixed;
-            self.fixed.put(&self.frame, 0, 0);
+        if self.parent != fixed {
+            self.parent.remove(&self.frame);
+            self.parent = fixed;
+            self.parent.put(&self.frame, 0, 0);
         }
     }
 
@@ -128,7 +173,7 @@ impl Window {
         self.frame.set_size_request(size.0, size.1);
 
         let win = gtk::Window::new(gtk::WindowType::Toplevel);
-        self.fixed.remove(&self.frame);
+        self.parent.remove(&self.frame);
         win.add(&self.frame);
 
         win.set_accept_focus(false);
@@ -146,13 +191,13 @@ impl Window {
     pub fn set_position(&mut self, x: f64, y: f64, w: f64, h: f64) {
         if let Some(win) = self.external_win.take() {
             win.remove(&self.frame);
-            self.fixed.add(&self.frame);
+            self.parent.add(&self.frame);
             win.close();
         }
 
         self.x = x;
         self.y = y;
-        self.fixed
+        self.parent
             .move_(&self.frame, x.floor() as i32, y.floor() as i32);
 
         self.frame
@@ -170,13 +215,13 @@ impl Window {
 
 impl Drop for Window {
     fn drop(&mut self) {
-        if let Some(child) = self.frame.get_child() {
-            // We don't want to destroy the child widget, so just remove the child from our
-            // container.
-            self.frame.remove(&child);
-        }
+        //if let Some(child) = self.frame.get_child() {
+        // We don't want to destroy the child widget, so just remove the child from our
+        // container.
+        //self.frame.remove(&child);
+        //}
 
-        self.fixed.remove(&self.frame);
+        self.parent.remove(&self.frame);
 
         if let Some(ref win) = self.external_win {
             win.close();

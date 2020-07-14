@@ -864,6 +864,32 @@ impl From<Value> for MsgSetPos {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct WindowViewport {
+    pub grid: i64,
+    pub win: Value,
+    pub topline: u64,
+    pub botline: u64,
+    pub curline: u64,
+    pub curcol: u64,
+    pub linecount: i64,
+}
+
+impl From<Value> for WindowViewport {
+    fn from(args: Value) -> Self {
+        let args = unwrap_array!(args);
+        Self {
+            grid: unwrap_i64!(args[0]),
+            win: args[1].clone(),
+            topline: unwrap_u64!(args[2]),
+            botline: unwrap_u64!(args[3]),
+            curline: unwrap_u64!(args[4]),
+            curcol: unwrap_u64!(args[5]),
+            linecount: unwrap_i64!(args[6]),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub enum RedrawEvent {
     SetTitle(Vec<String>),
 
@@ -903,6 +929,7 @@ pub enum RedrawEvent {
     WindowHide(Vec<i64>),
     WindowClose(Vec<i64>),
     MsgSetPos(Vec<MsgSetPos>),
+    WindowViewport(Vec<WindowViewport>),
 
     Ignored(String),
     Unknown(String),
@@ -956,6 +983,7 @@ impl fmt::Display for RedrawEvent {
             RedrawEvent::WindowHide(..) => write!(fmt, "WindowHide"),
             RedrawEvent::WindowClose(..) => write!(fmt, "WindowClose"),
             RedrawEvent::MsgSetPos(..) => write!(fmt, "MsgSetPos"),
+            RedrawEvent::WindowViewport(..) => write!(fmt, "WinViewport"),
 
             RedrawEvent::Ignored(..) => write!(fmt, "Ignored"),
             RedrawEvent::Unknown(e) => write!(fmt, "Unknown({})", e),
@@ -1196,6 +1224,9 @@ fn parse_single_redraw_event(cmd: &str, args: Vec<Value>) -> RedrawEvent {
         ),
         "msg_set_pos" => RedrawEvent::MsgSetPos(
             args.into_iter().map(MsgSetPos::from).collect(),
+        ),
+        "win_viewport" => RedrawEvent::WindowViewport(
+            args.into_iter().map(WindowViewport::from).collect(),
         ),
 
         "mouse_on" | "mouse_off" => RedrawEvent::Ignored(cmd.to_string()),
