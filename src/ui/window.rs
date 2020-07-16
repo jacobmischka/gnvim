@@ -1,8 +1,12 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use gtk::prelude::*;
 
 use nvim_rs::Window as NvimWindow;
 
-use crate::nvim_gio::GioWriter;
+use crate::nvim_gio::{GioNeovim, GioWriter};
+use crate::ui::common::spawn_local;
 use crate::ui::grid::Grid;
 
 pub struct MsgWindow {
@@ -69,11 +73,16 @@ impl MsgWindow {
 pub struct Window {
     parent: gtk::Fixed,
 
-    frame: gtk::Overlay,
+    overlay: gtk::Overlay,
     adj: gtk::Adjustment,
     scrollbar: gtk::Scrollbar,
 
     external_win: Option<gtk::Window>,
+    nvim: GioNeovim,
+    adj_changed_signal_id: glib::SignalHandlerId,
+
+    last_value: Rc<RefCell<f64>>,
+    cell_height: Rc<RefCell<f64>>,
 
     pub x: f64,
     pub y: f64,
@@ -89,15 +98,39 @@ impl Window {
         fixed: gtk::Fixed,
         grid: &Grid,
         css_provider: Option<gtk::CssProvider>,
+        nvim: GioNeovim,
     ) -> Self {
-        let frame = gtk::Overlay::new();
-        fixed.put(&frame, 0, 0);
+        let overlay = gtk::Overlay::new();
+        fixed.put(&overlay, 0, 0);
 
         let widget = grid.widget();
-        frame.add(&widget);
-        //frame.pack_start(&widget, true, true, 0);
+        overlay.add(&widget);
 
+        let last_value = Rc::new(RefCell::new(0.0));
+        let cell_height = Rc::new(RefCell::new(0.0));
         let adj = gtk::Adjustment::new(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let adj_changed_signal_id =
+            adj.connect_value_changed(clone!(nvim, last_value, cell_height => move |adj| {
+                let nvim = nvim.clone();
+                let cell_height = *cell_height.borrow();
+                let last_value = *last_value.borrow() / cell_height;
+
+                // TODO(ville): Spamming the input to nvim doesn't scale well on big documents.
+                // Find another way.
+                let d = (last_value - adj.get_value() / cell_height).ceil();
+                let op = if d < 0.0 {
+                    "<C-e>"
+                } else {
+                    "<C-y>"
+                };
+                let cmd = format!("{}", op.repeat(d.abs() as usize));
+
+                // TODO(ville): "Block" on this.
+                spawn_local(async move {
+                    nvim.input(&cmd).await.unwrap();
+                });
+            }));
+
         let scrollbar =
             gtk::Scrollbar::new(gtk::Orientation::Vertical, Some(&adj));
         scrollbar.set_halign(gtk::Align::End);
@@ -106,19 +139,22 @@ impl Window {
         // it to the contianer. Otherwise the initial draw will be with the
         // defualt styles and that looks weird.
         if let Some(css_provider) = css_provider {
-            add_css_provider!(&css_provider, frame, scrollbar);
+            add_css_provider!(&css_provider, overlay, scrollbar);
         }
 
-        frame.add_overlay(&scrollbar);
-        frame.set_overlay_pass_through(&scrollbar, true);
-        //frame.pack_end(&scrollbar, false, false, 0);
+        overlay.add_overlay(&scrollbar);
+        overlay.set_overlay_pass_through(&scrollbar, true);
 
         Self {
             parent: fixed,
-            frame,
+            overlay,
             adj,
             scrollbar,
             external_win: None,
+            nvim,
+            last_value,
+            cell_height,
+            adj_changed_signal_id,
             grid_id: grid.id,
             nvim_win: win,
             x: 0.0,
@@ -134,7 +170,10 @@ impl Window {
         step_increment: f64,
         page_increment: f64,
         page_size: f64,
+        cell_height: f64,
     ) {
+        glib::signal_handler_block(&self.adj, &self.adj_changed_signal_id);
+
         self.adj.configure(
             value,
             lower,
@@ -143,6 +182,11 @@ impl Window {
             page_increment,
             page_size,
         );
+
+        *self.last_value.borrow_mut() = value;
+        *self.cell_height.borrow_mut() = cell_height;
+
+        glib::signal_handler_unblock(&self.adj, &self.adj_changed_signal_id);
     }
 
     pub fn hide_scrollbar(&self) {
@@ -155,14 +199,14 @@ impl Window {
 
     pub fn set_parent(&mut self, fixed: gtk::Fixed) {
         if self.parent != fixed {
-            self.parent.remove(&self.frame);
+            self.parent.remove(&self.overlay);
             self.parent = fixed;
-            self.parent.put(&self.frame, 0, 0);
+            self.parent.put(&self.overlay, 0, 0);
         }
     }
 
     pub fn resize(&self, size: (i32, i32)) {
-        self.frame.set_size_request(size.0, size.1);
+        self.overlay.set_size_request(size.0, size.1);
     }
 
     pub fn set_external(&mut self, parent: &gtk::Window, size: (i32, i32)) {
@@ -170,11 +214,11 @@ impl Window {
             return;
         }
 
-        self.frame.set_size_request(size.0, size.1);
+        self.overlay.set_size_request(size.0, size.1);
 
         let win = gtk::Window::new(gtk::WindowType::Toplevel);
-        self.parent.remove(&self.frame);
-        win.add(&self.frame);
+        self.parent.remove(&self.overlay);
+        win.add(&self.overlay);
 
         win.set_accept_focus(false);
         win.set_deletable(false);
@@ -190,38 +234,38 @@ impl Window {
 
     pub fn set_position(&mut self, x: f64, y: f64, w: f64, h: f64) {
         if let Some(win) = self.external_win.take() {
-            win.remove(&self.frame);
-            self.parent.add(&self.frame);
+            win.remove(&self.overlay);
+            self.parent.add(&self.overlay);
             win.close();
         }
 
         self.x = x;
         self.y = y;
         self.parent
-            .move_(&self.frame, x.floor() as i32, y.floor() as i32);
+            .move_(&self.overlay, x.floor() as i32, y.floor() as i32);
 
-        self.frame
+        self.overlay
             .set_size_request(w.ceil() as i32, h.ceil() as i32);
     }
 
     pub fn show(&self) {
-        self.frame.show_all();
+        self.overlay.show_all();
     }
 
     pub fn hide(&self) {
-        self.frame.hide();
+        self.overlay.hide();
     }
 }
 
 impl Drop for Window {
     fn drop(&mut self) {
-        //if let Some(child) = self.frame.get_child() {
-        // We don't want to destroy the child widget, so just remove the child from our
-        // container.
-        //self.frame.remove(&child);
-        //}
+        if let Some(child) = self.overlay.get_child() {
+            // We don't want to destroy the child widget, so just remove the child from our
+            // container.
+            self.overlay.remove(&child);
+        }
 
-        self.parent.remove(&self.frame);
+        self.parent.remove(&self.overlay);
 
         if let Some(ref win) = self.external_win {
             win.close();

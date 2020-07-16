@@ -411,7 +411,8 @@ impl UIState {
                 .get_hl_group(&HlGroup::MsgSeparator)
                 .cloned()
                 .unwrap_or_default()
-                .foreground;
+                .foreground
+                .unwrap_or(self.hl_defs.default_fg);
 
             let scroll_bg = self
                 .hl_defs
@@ -419,7 +420,7 @@ impl UIState {
                 .cloned()
                 .unwrap_or_default()
                 .background
-                .unwrap_or(bg);
+                .unwrap_or(self.hl_defs.default_bg);
 
             // Set the styles for our main window.
             CssProviderExt::load_from_data(
@@ -457,16 +458,13 @@ impl UIState {
                     #message-grid-contianer frame.scrolled {{
                         border-top: 1px solid #{msgsep}
                     }}
-
-
                     ",
-                    bg = bg.to_hex(),
                     bg = self.hl_defs.default_bg.to_hex(),
                     slider_r = self.hl_defs.default_fg.r * 255.0,
                     slider_g = self.hl_defs.default_fg.g * 255.0,
                     slider_b = self.hl_defs.default_fg.b * 255.0,
                     scroll_bg = scroll_bg.to_hex(),
-                    msgsep = msgsep.unwrap_or(self.hl_defs.default_fg).to_hex(),
+                    msgsep = msgsep.to_hex(),
                 )
                 .as_bytes(),
             )
@@ -603,6 +601,7 @@ impl UIState {
                     windows_container,
                     &grid,
                     Some(css_provider),
+                    nvim.clone(),
                 )
             });
 
@@ -653,6 +652,7 @@ impl UIState {
                     windows_float_container,
                     &grid,
                     Some(css_provider),
+                    nvim.clone(),
                 )
             });
 
@@ -706,6 +706,7 @@ impl UIState {
                 windows_float_container,
                 &grid,
                 Some(css_provider),
+                nvim.clone(),
             )
         });
 
@@ -763,6 +764,7 @@ impl UIState {
                 metrics.height,
                 metrics.height,
                 metrics.height,
+                metrics.cell_height,
             );
         }
     }
